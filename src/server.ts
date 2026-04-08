@@ -72,37 +72,48 @@ export function createServer(options: ServerOptions) {
   wss.on("connection", (ws: WebSocket) => {
     ws.binaryType = "arraybuffer";
 
-    // Buffer live PTY output while we capture scrollback
+    // Buffer live output until we're ready to stream
     const buffer: Buffer[] = [];
     const bufferHandler = (data: string) => {
       buffer.push(Buffer.from(data, "utf-8"));
     };
     terminal.on("data", bufferHandler);
 
-    // Send pane dimensions so phone can match tmux size
+    // Send pane dimensions so phone can calculate its size
     const paneSize = terminal.getPaneSize();
     ws.send(JSON.stringify({ type: "pane_size", cols: paneSize.cols, rows: paneSize.rows }));
 
-    // Send scrollback history
-    const scrollback = terminal.captureScrollback(1000);
-    const scrollbackMsg: ControlMessage = { type: "scrollback", data: scrollback };
-    ws.send(JSON.stringify(scrollbackMsg));
+    // Wait for phone's first resize before sending scrollback.
+    // The phone calculates its cols/rows, sends resize, THEN we
+    // capture scrollback at the correct (phone) width.
+    let scrollbackSent = false;
 
-    // Flush buffered live data
-    terminal.removeListener("data", bufferHandler);
-    for (const chunk of buffer) {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(chunk);
-      }
+    function sendScrollbackAndStartRelay() {
+      if (scrollbackSent) return;
+      scrollbackSent = true;
+
+      // Small delay to let tmux redraw at the new size
+      setTimeout(() => {
+        const scrollback = terminal.captureScrollback(1000);
+        ws.send(JSON.stringify({ type: "scrollback", data: scrollback }));
+
+        // Flush buffered live data
+        terminal.removeListener("data", bufferHandler);
+        for (const chunk of buffer) {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(chunk);
+          }
+        }
+
+        // Switch to live relay
+        liveHandler = (data: string) => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(Buffer.from(data, "utf-8"));
+          }
+        };
+        terminal.on("data", liveHandler);
+      }, 300);
     }
-
-    // Switch to live relay
-    liveHandler = (data: string) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(Buffer.from(data, "utf-8"));
-      }
-    };
-    terminal.on("data", liveHandler);
 
     // Handle incoming messages from phone
     ws.on("message", (data, isBinary) => {
@@ -116,12 +127,17 @@ export function createServer(options: ServerOptions) {
           const msg: ControlMessage = JSON.parse(data.toString());
           if (msg.type === "resize") {
             terminal.resize(msg.cols, msg.rows);
+            // First resize triggers scrollback capture
+            sendScrollbackAndStartRelay();
           }
         } catch {
           // ignore malformed control messages
         }
       }
     });
+
+    // Fallback: if phone never sends resize (e.g. desktop browser), send scrollback after 2s
+    setTimeout(() => sendScrollbackAndStartRelay(), 2000);
 
     ws.on("close", () => {
       // Restore laptop terminal size
