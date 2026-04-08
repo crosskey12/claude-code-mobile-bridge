@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#0f0f17">
+  <title>Terminal Mirror</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@6.0.0/css/xterm.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@6.0.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.11.0/lib/addon-fit.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --bg: #0f0f17;
+      --bg-surface: #1a1a2e;
+      --border: #2a2a4a;
+      --text: #e0e0f0;
+      --text-dim: #8888aa;
+      --accent: #7c6cf0;
+      --accent-dim: #5a4fcf;
+      --error: #f05050;
+      --success: #50f080;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100dvh;
+      overflow: hidden;
+    }
+    #auth-screen {
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; height: 100dvh; padding: 24px; gap: 24px;
+    }
+    #auth-screen h1 { font-size: 22px; font-weight: 600; color: var(--accent); }
+    #auth-screen p { color: var(--text-dim); font-size: 14px; text-align: center; max-width: 300px; }
+    #token-input {
+      width: 100%; max-width: 320px; padding: 14px 16px; font-size: 17px;
+      font-family: "SF Mono", Menlo, monospace; background: var(--bg-surface);
+      border: 1px solid var(--border); border-radius: 12px; color: var(--text);
+      text-align: center; letter-spacing: 1px; outline: none;
+    }
+    #token-input:focus { border-color: var(--accent); }
+    #connect-btn {
+      width: 100%; max-width: 320px; padding: 14px; font-size: 16px; font-weight: 600;
+      background: var(--accent); color: white; border: none; border-radius: 12px; cursor: pointer;
+    }
+    #connect-btn:active { background: var(--accent-dim); }
+    #connect-btn:disabled { opacity: 0.5; }
+    #auth-error { color: var(--error); font-size: 13px; min-height: 20px; }
+
+    #terminal-screen { display: flex; flex-direction: column; height: 100dvh; }
+    #terminal-container {
+      flex: 1; overflow: hidden; padding: 4px;
+      padding-top: env(safe-area-inset-top, 4px);
+    }
+    #terminal-container .xterm { height: 100%; }
+    #conn-dot {
+      position: fixed; top: calc(env(safe-area-inset-top, 8px) + 6px);
+      right: 10px; width: 10px; height: 10px; border-radius: 50%;
+      background: var(--success); z-index: 100; opacity: 0.8;
+    }
+    #conn-dot.disconnected { background: var(--error); animation: pulse 1.2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:0.8} 50%{opacity:0.2} }
+
+    #key-toolbar {
+      display: flex; gap: 4px; padding: 6px 8px;
+      padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 6px);
+      background: var(--bg-surface); border-top: 1px solid var(--border);
+      flex-shrink: 0; overflow-x: auto; -webkit-overflow-scrolling: touch;
+    }
+    .key-btn {
+      padding: 8px 12px; font-size: 13px; font-family: "SF Mono", Menlo, monospace;
+      font-weight: 600; background: #252545; color: var(--text);
+      border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+      white-space: nowrap; flex-shrink: 0; user-select: none;
+    }
+    .key-btn:active { background: var(--accent-dim); }
+    .key-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div id="auth-screen">
+    <h1>Terminal Mirror</h1>
+    <p>Enter the token shown in your terminal to connect.</p>
+    <input type="text" id="token-input" placeholder="Paste token here" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+    <button id="connect-btn">Connect</button>
+    <div id="auth-error"></div>
+  </div>
+
+  <div id="terminal-screen" class="hidden">
+    <div id="conn-dot"></div>
+    <div id="terminal-container"></div>
+    <div id="key-toolbar">
+      <button class="key-btn" data-key="\x1b">Esc</button>
+      <button class="key-btn" id="ctrl-btn">Ctrl</button>
+      <button class="key-btn" data-key="\t">Tab</button>
+      <button class="key-btn" data-key="\x03">C-c</button>
+      <button class="key-btn" data-key="\x1a">C-z</button>
+      <button class="key-btn" data-key="\x04">C-d</button>
+      <button class="key-btn" data-key="\x1b[A">&uarr;</button>
+      <button class="key-btn" data-key="\x1b[B">&darr;</button>
+      <button class="key-btn" data-key="\x1b[D">&larr;</button>
+      <button class="key-btn" data-key="\x1b[C">&rarr;</button>
+    </div>
+  </div>
+
+  <script>
+    var ws = null, token = "", term = null, fitAddon = null, ctrlActive = false;
+    var authScreen = document.getElementById("auth-screen");
+    var termScreen = document.getElementById("terminal-screen");
+    var tokenInput = document.getElementById("token-input");
+    var connectBtn = document.getElementById("connect-btn");
+    var authError = document.getElementById("auth-error");
+    var connDot = document.getElementById("conn-dot");
+    var ctrlBtn = document.getElementById("ctrl-btn");
+
+    function initTerminal() {
+      fitAddon = new FitAddon.FitAddon();
+      term = new Terminal({
+        fontSize: 13,
+        fontFamily: '"SF Mono", Menlo, "Courier New", monospace',
+        theme: {
+          background: "#0f0f17", foreground: "#e0e0f0", cursor: "#7c6cf0",
+          cursorAccent: "#0f0f17", selectionBackground: "#7c6cf044",
+          black: "#1a1a2e", red: "#f05050", green: "#50f080", yellow: "#f0d050",
+          blue: "#5080f0", magenta: "#c050f0", cyan: "#50d0f0", white: "#e0e0f0",
+          brightBlack: "#4a4a6a", brightRed: "#ff7070", brightGreen: "#70ff90",
+          brightYellow: "#ffd070", brightBlue: "#70a0ff", brightMagenta: "#d070ff",
+          brightCyan: "#70e0ff", brightWhite: "#ffffff"
+        },
+        scrollback: 5000, cursorBlink: true, convertEol: true,
+      });
+      term.loadAddon(fitAddon);
+      term.open(document.getElementById("terminal-container"));
+      requestAnimationFrame(function() { fitAddon.fit(); });
+
+      // Send keystrokes as binary
+      term.onData(function(data) {
+        if (ctrlActive && data.length === 1) {
+          var code = data.toLowerCase().charCodeAt(0);
+          if (code >= 97 && code <= 122) data = String.fromCharCode(code - 96);
+          ctrlActive = false;
+          ctrlBtn.classList.remove("active");
+        }
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(new TextEncoder().encode(data));
+        }
+      });
+    }
+
+    // Auth
+    connectBtn.addEventListener("click", connect);
+    tokenInput.addEventListener("keydown", function(e) { if (e.key === "Enter") connect(); });
+
+    function connect() {
+      token = tokenInput.value.trim();
+      if (!token) { authError.textContent = "Please enter a token."; return; }
+      authError.textContent = "";
+      connectBtn.disabled = true;
+      connectBtn.textContent = "Connecting...";
+      openWebSocket();
+    }
+
+    // WebSocket — connects to the Python bridge on WS port
+    var reconnectAttempts = 0, reconnectTimer = null;
+
+    function openWebSocket() {
+      // WS port is the main port (8800), HTTP is on http-port (8801)
+      var wsHost = location.hostname;
+      var wsPort = parseInt(location.port) - 1; // HTTP=8801, WS=8800
+      var url = "ws://" + wsHost + ":" + wsPort + "/ws?token=" + encodeURIComponent(token);
+
+      ws = new WebSocket(url);
+      ws.binaryType = "arraybuffer";
+
+      ws.onopen = function() {
+        reconnectAttempts = 0;
+        authScreen.classList.add("hidden");
+        termScreen.classList.remove("hidden");
+        connDot.classList.remove("disconnected");
+        sessionStorage.setItem("ccbridge_token", token);
+        connectBtn.disabled = false;
+        connectBtn.textContent = "Connect";
+        if (!term) initTerminal();
+        else { term.reset(); requestAnimationFrame(function() { fitAddon.fit(); }); }
+      };
+
+      ws.onmessage = function(event) {
+        if (typeof event.data === "string") {
+          try {
+            var msg = JSON.parse(event.data);
+            if (msg.type === "screen" && msg.data) {
+              // Full screen update: clear and rewrite
+              term.reset();
+              term.write(msg.data);
+            } else if (msg.type === "error") {
+              term.write("\r\n\x1b[31m[Error] " + msg.message + "\x1b[0m\r\n");
+            }
+          } catch(e) {}
+        }
+      };
+
+      ws.onclose = function() {
+        if (termScreen.classList.contains("hidden")) {
+          authError.textContent = "Connection failed. Check token.";
+          connectBtn.disabled = false;
+          connectBtn.textContent = "Connect";
+          return;
+        }
+        connDot.classList.add("disconnected");
+        scheduleReconnect();
+      };
+      ws.onerror = function() {};
+    }
+
+    function scheduleReconnect() {
+      if (reconnectTimer) return;
+      var delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 10000);
+      reconnectAttempts++;
+      reconnectTimer = setTimeout(function() { reconnectTimer = null; openWebSocket(); }, delay);
+    }
+
+    // Resize
+    window.addEventListener("resize", function() { if (fitAddon) fitAddon.fit(); });
+    window.addEventListener("orientationchange", function() {
+      setTimeout(function() { if (fitAddon) fitAddon.fit(); }, 300);
+    });
+
+    // Key toolbar
+    document.getElementById("key-toolbar").addEventListener("click", function(e) {
+      var btn = e.target.closest(".key-btn");
+      if (!btn || !term) return;
+      if (btn.id === "ctrl-btn") {
+        ctrlActive = !ctrlActive;
+        btn.classList.toggle("active", ctrlActive);
+        term.focus();
+        return;
+      }
+      var key = btn.getAttribute("data-key");
+      if (key) {
+        key = key.replace(/\\x([0-9a-fA-F]{2})/g, function(_, h) {
+          return String.fromCharCode(parseInt(h, 16));
+        }).replace(/\\t/g, "\t");
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(key));
+        term.focus();
+      }
+    });
+
+    // Auto-restore
+    var saved = sessionStorage.getItem("ccbridge_token");
+    if (saved) { token = saved; openWebSocket(); }
+  </script>
+</body>
+</html>
