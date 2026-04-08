@@ -165,14 +165,12 @@
       openWebSocket();
     }
 
-    // WebSocket — connects to the Python bridge on WS port
+    // WebSocket — same port as HTTP
     var reconnectAttempts = 0, reconnectTimer = null;
 
     function openWebSocket() {
-      // WS port is the main port (8800), HTTP is on http-port (8801)
-      var wsHost = location.hostname;
-      var wsPort = parseInt(location.port) - 1; // HTTP=8801, WS=8800
-      var url = "ws://" + wsHost + ":" + wsPort + "/ws?token=" + encodeURIComponent(token);
+      var protocol = location.protocol === "https:" ? "wss:" : "ws:";
+      var url = protocol + "//" + location.host + "/ws?token=" + encodeURIComponent(token);
 
       ws = new WebSocket(url);
       ws.binaryType = "arraybuffer";
@@ -194,8 +192,7 @@
           try {
             var msg = JSON.parse(event.data);
             if (msg.type === "screen" && msg.data) {
-              // Full screen update: clear and rewrite
-              term.reset();
+              // Screen update — ANSI includes cursor home + clear
               term.write(msg.data);
             } else if (msg.type === "error") {
               term.write("\r\n\x1b[31m[Error] " + msg.message + "\x1b[0m\r\n");

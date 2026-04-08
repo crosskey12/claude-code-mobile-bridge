@@ -15,21 +15,18 @@ import json
 import os
 import secrets
 import socket
+import subprocess
 import argparse
 from typing import Optional
 
 import iterm2
-import websockets
-from websockets.asyncio.server import serve as ws_serve
+from aiohttp import web
 
 
 def get_lan_ip() -> Optional[str]:
     """Detect LAN IP address, preferring WiFi over VPN."""
-    # Parse en0 (WiFi on macOS) from ifconfig
     try:
-        import subprocess
         result = subprocess.run(["ifconfig"], capture_output=True, text=True)
-        # Parse ifconfig output for en0 (WiFi on macOS)
         lines = result.stdout.split("\n")
         in_en0 = False
         for line in lines:
@@ -44,8 +41,6 @@ def get_lan_ip() -> Optional[str]:
                     return parts[idx]
     except Exception:
         pass
-
-    # Fallback: UDP trick
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("10.255.255.255", 1))
@@ -59,7 +54,6 @@ def get_lan_ip() -> Optional[str]:
 
 
 def generate_token() -> str:
-    """Generate a human-friendly two-word token."""
     adjectives = [
         "brave", "calm", "dark", "eager", "fair", "glad", "happy", "keen",
         "lively", "mellow", "noble", "proud", "quick", "rapid", "sharp",
@@ -78,7 +72,6 @@ def generate_token() -> str:
 def style_to_ansi(style, text: str) -> str:
     """Convert iTerm CellStyle to ANSI escape codes wrapping the text."""
     codes = []
-
     if style.bold:
         codes.append("1")
     if style.faint:
@@ -122,18 +115,22 @@ def style_to_ansi(style, text: str) -> str:
 
     if not codes:
         return text
-
     return f"\033[{';'.join(codes)}m{text}\033[0m"
 
 
 def screen_to_ansi(contents) -> str:
-    """Convert iTerm ScreenContents to ANSI-coded string for xterm.js."""
-    lines = []
+    """Convert iTerm ScreenContents to ANSI-coded string for xterm.js.
+
+    Uses cursor positioning to overwrite the screen in-place,
+    so xterm.js doesn't need to be cleared between updates.
+    """
+    # Move cursor to home position and clear screen
+    output = "\033[H\033[2J"
+
     for i in range(contents.number_of_lines):
         line = contents.line(i)
         raw_text = line.string
 
-        # Build styled line by grouping consecutive chars with same style
         result = []
         j = 0
         while j < len(raw_text):
@@ -150,7 +147,6 @@ def screen_to_ansi(contents) -> str:
                 j += 1
                 continue
 
-            # Group consecutive chars with same style
             group = char
             k = j + 1
             while k < len(raw_text):
@@ -159,17 +155,35 @@ def screen_to_ansi(contents) -> str:
                     break
                 try:
                     next_style = line.style_at(k)
-                    if (next_style.bold != style.bold or
-                        next_style.italic != style.italic or
-                        next_style.fg_color.is_rgb != style.fg_color.is_rgb or
-                        next_style.fg_color.is_standard != style.fg_color.is_standard):
+                    same = (
+                        next_style.bold == style.bold
+                        and next_style.faint == style.faint
+                        and next_style.italic == style.italic
+                        and next_style.underline == style.underline
+                        and next_style.inverse == style.inverse
+                    )
+                    if same:
+                        # Check fg color match
+                        if style.fg_color.is_rgb and next_style.fg_color.is_rgb:
+                            same = style.fg_color.rgb == next_style.fg_color.rgb
+                        elif style.fg_color.is_standard and next_style.fg_color.is_standard:
+                            same = style.fg_color.standard == next_style.fg_color.standard
+                        elif style.fg_color.is_alternate and next_style.fg_color.is_alternate:
+                            same = True
+                        else:
+                            same = False
+                    if same:
+                        # Check bg color match
+                        if style.bg_color.is_rgb and next_style.bg_color.is_rgb:
+                            same = style.bg_color.rgb == next_style.bg_color.rgb
+                        elif style.bg_color.is_standard and next_style.bg_color.is_standard:
+                            same = style.bg_color.standard == next_style.bg_color.standard
+                        elif style.bg_color.is_alternate and next_style.bg_color.is_alternate:
+                            same = True
+                        else:
+                            same = False
+                    if not same:
                         break
-                    if style.fg_color.is_rgb and next_style.fg_color.is_rgb:
-                        if style.fg_color.rgb != next_style.fg_color.rgb:
-                            break
-                    if style.fg_color.is_standard and next_style.fg_color.is_standard:
-                        if style.fg_color.standard != next_style.fg_color.standard:
-                            break
                 except Exception:
                     break
                 group += next_char
@@ -178,15 +192,12 @@ def screen_to_ansi(contents) -> str:
             result.append(style_to_ansi(style, group))
             j = k
 
-        # Strip trailing spaces
         line_text = ''.join(result).rstrip()
-        lines.append(line_text)
+        output += line_text
+        if i < contents.number_of_lines - 1:
+            output += "\r\n"
 
-    # Remove trailing empty lines
-    while lines and not lines[-1]:
-        lines.pop()
-
-    return '\r\n'.join(lines)
+    return output
 
 
 class Bridge:
@@ -195,12 +206,81 @@ class Bridge:
         self.session_id = session_id
         self.token = generate_token()
         self.lan_ip = get_lan_ip()
-        self.active_ws = None
+        self.active_ws: Optional[web.WebSocketResponse] = None
         self.iterm_session = None
-        self.running = False
+        self.app = web.Application()
+        self.app.router.add_get("/", self.handle_http)
+        self.app.router.add_get("/ws", self.handle_ws)
+        self.app.router.add_get("/health", self.handle_health)
+
+    async def handle_http(self, request):
+        html_path = os.path.join(os.path.dirname(__file__), "src", "ui", "iterm.html")
+        with open(html_path, "r") as f:
+            return web.Response(text=f.read(), content_type="text/html")
+
+    async def handle_health(self, request):
+        return web.json_response({"ok": True})
+
+    async def handle_ws(self, request):
+        # Auth check
+        token = request.query.get("token", "")
+        if token != self.token:
+            return web.Response(status=401, text="Unauthorized")
+
+        if self.active_ws is not None and not self.active_ws.closed:
+            return web.Response(status=409, text="Another client connected")
+
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        self.active_ws = ws
+        print("Phone connected")
+
+        stream_task = None
+        try:
+            # Send initial screen
+            contents = await self.iterm_session.async_get_screen_contents()
+            ansi_text = screen_to_ansi(contents)
+            await ws.send_str(json.dumps({"type": "screen", "data": ansi_text}))
+
+            # Start streaming
+            stream_task = asyncio.create_task(self.stream_to_phone(ws))
+
+            # Handle input from phone
+            async for msg in ws:
+                if msg.type == web.WSMsgType.BINARY:
+                    text = msg.data.decode("utf-8")
+                    await self.iterm_session.async_send_text(text)
+                elif msg.type == web.WSMsgType.TEXT:
+                    pass  # control messages — ignore for now
+                elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.ERROR):
+                    break
+        finally:
+            if stream_task:
+                stream_task.cancel()
+            self.active_ws = None
+            print("Phone disconnected")
+
+        return ws
+
+    async def stream_to_phone(self, ws: web.WebSocketResponse):
+        """Stream screen updates to the phone."""
+        try:
+            async with self.iterm_session.get_screen_streamer(want_contents=True) as streamer:
+                while not ws.closed:
+                    try:
+                        contents = await asyncio.wait_for(streamer.async_get(), timeout=30.0)
+                    except asyncio.TimeoutError:
+                        continue
+
+                    ansi_text = screen_to_ansi(contents)
+                    try:
+                        await ws.send_str(json.dumps({"type": "screen", "data": ansi_text}))
+                    except (ConnectionResetError, ConnectionError):
+                        break
+        except asyncio.CancelledError:
+            pass
 
     async def find_session(self, app):
-        """Find the target iTerm session."""
         if self.session_id:
             for window in app.terminal_windows:
                 for tab in window.tabs:
@@ -209,7 +289,6 @@ class Bridge:
                             return session
             return None
 
-        # List all sessions, let user pick or auto-select
         sessions = []
         for window in app.terminal_windows:
             for tab in window.tabs:
@@ -221,7 +300,6 @@ class Bridge:
         if len(sessions) == 1:
             return sessions[0]
 
-        # Print sessions for user to pick
         print("\nMultiple sessions found:")
         for i, s in enumerate(sessions):
             print(f"  {i+1}. {s.name} ({s.session_id})")
@@ -229,73 +307,9 @@ class Bridge:
         print(f"Using first session: {sessions[0].name}")
         return sessions[0]
 
-    async def handle_ws(self, ws):
-        """Handle a phone WebSocket connection."""
-        # Auth check
-        path = ws.request.path if hasattr(ws.request, 'path') else ws.path
-        if f"token={self.token}" not in (path or ""):
-            await ws.close(4001, "Unauthorized")
-            return
-
-        if self.active_ws is not None:
-            await ws.close(4009, "Another client connected")
-            return
-
-        self.active_ws = ws
-        print(f"Phone connected")
-
-        try:
-            # Send initial screen content
-            contents = await self.iterm_session.async_get_screen_contents()
-            ansi_text = screen_to_ansi(contents)
-            await ws.send(json.dumps({"type": "screen", "data": ansi_text}))
-
-            # Start streaming in background
-            stream_task = asyncio.create_task(self.stream_to_phone(ws))
-
-            # Handle input from phone
-            async for message in ws:
-                if isinstance(message, bytes):
-                    # Binary = keystrokes
-                    text = message.decode("utf-8")
-                    await self.iterm_session.async_send_text(text)
-                else:
-                    # Text = control message (ignore for now)
-                    pass
-
-        except websockets.ConnectionClosed:
-            pass
-        finally:
-            stream_task.cancel()
-            self.active_ws = None
-            print("Phone disconnected")
-
-    async def stream_to_phone(self, ws):
-        """Stream screen updates to the phone."""
-        try:
-            async with self.iterm_session.get_screen_streamer(want_contents=True) as streamer:
-                while True:
-                    try:
-                        contents = await asyncio.wait_for(streamer.async_get(), timeout=30.0)
-                    except asyncio.TimeoutError:
-                        # Send a ping to keep connection alive
-                        continue
-
-                    if ws.closed:
-                        break
-
-                    ansi_text = screen_to_ansi(contents)
-                    try:
-                        await ws.send(json.dumps({"type": "screen", "data": ansi_text}))
-                    except websockets.ConnectionClosed:
-                        break
-        except asyncio.CancelledError:
-            pass
-
     async def run_bridge(self, connection):
-        """Main bridge logic — runs inside iTerm2 API context."""
-        app = await iterm2.async_get_app(connection)
-        self.iterm_session = await self.find_session(app)
+        iterm_app = await iterm2.async_get_app(connection)
+        self.iterm_session = await self.find_session(iterm_app)
 
         if not self.iterm_session:
             print("No iTerm session found!")
@@ -307,16 +321,15 @@ class Bridge:
             print("Could not detect LAN IP!")
             return
 
-        # Start WebSocket server
-        async def ws_handler(ws):
-            await self.handle_ws(ws)
-
-        server = await ws_serve(ws_handler, self.lan_ip, self.port)
+        runner = web.AppRunner(self.app)
+        await runner.setup()
+        site = web.TCPSite(runner, self.lan_ip, self.port)
+        await site.start()
 
         print(f"""
 ╔══════════════════════════════════════════════════════╗
 ║           Claude Code Terminal Mirror                ║
-║                (iTerm2 API mode)                     ║
+║              (iTerm2 API · no tmux)                  ║
 ╠══════════════════════════════════════════════════════╣
 ║                                                      ║
 ║  URL:   http://{(self.lan_ip + ':' + str(self.port)).ljust(37)}║
@@ -328,68 +341,24 @@ class Bridge:
 ╚══════════════════════════════════════════════════════╝
 """)
 
-        self.running = True
         try:
             await asyncio.Future()  # Run forever
         except asyncio.CancelledError:
             pass
         finally:
-            server.close()
+            await runner.cleanup()
 
     def start(self):
-        """Entry point."""
         iterm2.run_until_complete(self.run_bridge)
-
-
-# --- Simple HTTP + WS server ---
-# websockets doesn't serve HTTP, so we need a thin wrapper
-# to serve index.html on GET / and upgrade to WS on /ws
-
-import http.server
-import threading
-
-
-class HTTPHandler(http.server.BaseHTTPRequestHandler):
-    bridge = None
-
-    def do_GET(self):
-        if self.path == "/" or self.path == "/index.html":
-            html_path = os.path.join(os.path.dirname(__file__), "src", "ui", "iterm.html")
-            with open(html_path, "r") as f:
-                content = f.read()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(content.encode())
-        elif self.path == "/health":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"ok":true}')
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def log_message(self, format, *args):
-        pass  # Silence HTTP logs
 
 
 def main():
     parser = argparse.ArgumentParser(description="Terminal Mirror — iTerm2 API")
     parser.add_argument("--port", type=int, default=8800)
-    parser.add_argument("--http-port", type=int, default=8801)
     parser.add_argument("--session", type=str, default=None)
     args = parser.parse_args()
 
     bridge = Bridge(port=args.port, session_id=args.session)
-
-    # Start HTTP server in a thread for serving the HTML
-    HTTPHandler.bridge = bridge
-    http_server = http.server.HTTPServer((bridge.lan_ip or "0.0.0.0", args.http_port), HTTPHandler)
-    http_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
-    http_thread.start()
-
-    print(f"HTTP server on port {args.http_port} (for the UI)")
     bridge.start()
 
 
