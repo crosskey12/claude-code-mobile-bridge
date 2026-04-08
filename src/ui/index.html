@@ -267,6 +267,10 @@
         cursorBlink: true,
         allowProposedApi: true,
         drawBoldTextInBrightColors: true,
+        overviewRulerWidth: 0,
+        scrollOnUserInput: true,
+        fastScrollSensitivity: 5,
+        smoothScrollDuration: 100,
       });
 
       var webLinksAddon = new WebLinksAddon.WebLinksAddon();
@@ -407,6 +411,33 @@
         if (fitAddon) fitAddon.fit();
       }, 300);
     });
+
+    // --- Touch scrolling for mobile ---
+    (function() {
+      var container = document.getElementById("terminal-container");
+      var touchStartY = 0;
+      var touchLastY = 0;
+
+      container.addEventListener("touchstart", function(e) {
+        if (e.touches.length === 1) {
+          touchStartY = e.touches[0].clientY;
+          touchLastY = touchStartY;
+        }
+      }, { passive: true });
+
+      container.addEventListener("touchmove", function(e) {
+        if (!term || e.touches.length !== 1) return;
+        var y = e.touches[0].clientY;
+        var delta = touchLastY - y;
+        touchLastY = y;
+
+        // Convert pixel delta to lines (roughly 1 line per 20px)
+        var lines = Math.round(delta / 16);
+        if (lines !== 0) {
+          term.scrollLines(lines);
+        }
+      }, { passive: true });
+    })();
 
     // --- Disconnect button ---
     document.getElementById("disconnect-btn").addEventListener("click", function() {
