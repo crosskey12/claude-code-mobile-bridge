@@ -412,30 +412,59 @@
       }, 300);
     });
 
-    // --- Touch scrolling for mobile ---
+    // --- Smooth touch scrolling for mobile ---
     (function() {
       var container = document.getElementById("terminal-container");
-      var touchStartY = 0;
       var touchLastY = 0;
+      var velocity = 0;
+      var momentumId = null;
+      var accumulated = 0;
+      var lineHeight = 16; // approx pixels per terminal line
 
       container.addEventListener("touchstart", function(e) {
         if (e.touches.length === 1) {
-          touchStartY = e.touches[0].clientY;
-          touchLastY = touchStartY;
+          touchLastY = e.touches[0].clientY;
+          velocity = 0;
+          accumulated = 0;
+          if (momentumId) { cancelAnimationFrame(momentumId); momentumId = null; }
         }
       }, { passive: true });
 
       container.addEventListener("touchmove", function(e) {
         if (!term || e.touches.length !== 1) return;
         var y = e.touches[0].clientY;
-        var delta = touchLastY - y;
+        var pixelDelta = touchLastY - y;
         touchLastY = y;
+        velocity = pixelDelta;
 
-        // Convert pixel delta to lines (roughly 1 line per 20px)
-        var lines = Math.round(delta / 16);
+        // Accumulate sub-line pixel deltas for smooth feel
+        accumulated += pixelDelta;
+        var lines = Math.trunc(accumulated / lineHeight);
         if (lines !== 0) {
           term.scrollLines(lines);
+          accumulated -= lines * lineHeight;
         }
+      }, { passive: true });
+
+      container.addEventListener("touchend", function() {
+        // Momentum scrolling: decay velocity over time
+        if (Math.abs(velocity) < 2) return;
+
+        var momentum = velocity * 0.8;
+
+        function tick() {
+          if (Math.abs(momentum) < 0.5) return;
+          accumulated += momentum;
+          var lines = Math.trunc(accumulated / lineHeight);
+          if (lines !== 0 && term) {
+            term.scrollLines(lines);
+            accumulated -= lines * lineHeight;
+          }
+          momentum *= 0.92; // friction
+          momentumId = requestAnimationFrame(tick);
+        }
+
+        momentumId = requestAnimationFrame(tick);
       }, { passive: true });
     })();
 
