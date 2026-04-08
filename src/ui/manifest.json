@@ -1,0 +1,9 @@
+{
+  "name": "Terminal Mirror",
+  "short_name": "TermMirror",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f0f17",
+  "theme_color": "#0f0f17",
+  "description": "Mirror your tmux terminal on your phone"
+}

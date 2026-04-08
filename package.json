@@ -1,0 +1,20 @@
+{
+  "name": "ccbridge",
+  "version": "0.1.0",
+  "description": "Mirror your terminal on your phone over WiFi",
+  "type": "module",
+  "scripts": {
+    "start": "node --experimental-strip-types src/main.ts",
+    "dev": "node --experimental-strip-types --watch-path=./src src/main.ts"
+  },
+  "dependencies": {
+    "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1"
+  },
+  "engines": {
+    "node": ">=23.0.0"
+  }
+}
