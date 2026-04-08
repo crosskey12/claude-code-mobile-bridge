@@ -207,6 +207,7 @@
       <button class="key-btn" data-key="\x1b[B">&darr;</button>
       <button class="key-btn" data-key="\x1b[D">&larr;</button>
       <button class="key-btn" data-key="\x1b[C">&rarr;</button>
+      <button class="key-btn" id="disconnect-btn" style="margin-left:auto;background:#f05050;border-color:#f05050;color:white;">Exit</button>
     </div>
   </div>
 
@@ -405,6 +406,17 @@
       setTimeout(function() {
         if (fitAddon) fitAddon.fit();
       }, 300);
+    });
+
+    // --- Disconnect button ---
+    document.getElementById("disconnect-btn").addEventListener("click", function() {
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      reconnectAttempts = 999; // prevent auto-reconnect
+      if (ws) ws.close();
+      sessionStorage.removeItem("ccbridge_token");
+      termScreen.classList.add("hidden");
+      authScreen.classList.remove("hidden");
+      if (term) { term.dispose(); term = null; fitAddon = null; }
     });
 
     // --- Special key toolbar ---
