@@ -416,51 +416,68 @@
     (function() {
       var container = document.getElementById("terminal-container");
       var touchLastY = 0;
-      var velocity = 0;
+      var touchLastTime = 0;
+      var velocities = []; // track recent velocities for flick detection
       var momentumId = null;
       var accumulated = 0;
-      var lineHeight = 6; // lower = faster scrolling per pixel of swipe
+      var PX_PER_LINE = 3; // very sensitive: 3px of swipe = 1 line
+
+      function stopMomentum() {
+        if (momentumId) { cancelAnimationFrame(momentumId); momentumId = null; }
+        accumulated = 0;
+        velocities = [];
+      }
 
       container.addEventListener("touchstart", function(e) {
         if (e.touches.length === 1) {
+          stopMomentum(); // touch stops any ongoing momentum
           touchLastY = e.touches[0].clientY;
-          velocity = 0;
-          accumulated = 0;
-          if (momentumId) { cancelAnimationFrame(momentumId); momentumId = null; }
+          touchLastTime = Date.now();
+          velocities = [];
         }
       }, { passive: true });
 
       container.addEventListener("touchmove", function(e) {
         if (!term || e.touches.length !== 1) return;
         var y = e.touches[0].clientY;
+        var now = Date.now();
         var pixelDelta = touchLastY - y;
-        touchLastY = y;
-        velocity = pixelDelta;
+        var dt = now - touchLastTime || 1;
 
-        // Accumulate sub-line pixel deltas for smooth feel
+        // Track velocity (pixels per ms) for momentum calculation
+        velocities.push(pixelDelta / dt);
+        if (velocities.length > 5) velocities.shift();
+
+        touchLastY = y;
+        touchLastTime = now;
+
+        // Scroll immediately — very responsive
         accumulated += pixelDelta;
-        var lines = Math.trunc(accumulated / lineHeight);
+        var lines = Math.trunc(accumulated / PX_PER_LINE);
         if (lines !== 0) {
           term.scrollLines(lines);
-          accumulated -= lines * lineHeight;
+          accumulated -= lines * PX_PER_LINE;
         }
       }, { passive: true });
 
       container.addEventListener("touchend", function() {
-        // Momentum scrolling: decay velocity over time
-        if (Math.abs(velocity) < 2) return;
+        if (velocities.length === 0) return;
 
-        var momentum = velocity * 2.5;
+        // Average recent velocity, amplify for short fast flicks
+        var avgVel = velocities.reduce(function(a, b) { return a + b; }, 0) / velocities.length;
+        var momentum = avgVel * 40; // big multiplier for short flicks
+
+        if (Math.abs(momentum) < 1) return;
 
         function tick() {
-          if (Math.abs(momentum) < 0.5) return;
+          if (Math.abs(momentum) < 0.3) return;
           accumulated += momentum;
-          var lines = Math.trunc(accumulated / lineHeight);
+          var lines = Math.trunc(accumulated / PX_PER_LINE);
           if (lines !== 0 && term) {
             term.scrollLines(lines);
-            accumulated -= lines * lineHeight;
+            accumulated -= lines * PX_PER_LINE;
           }
-          momentum *= 0.95; // friction (higher = longer coast)
+          momentum *= 0.94;
           momentumId = requestAnimationFrame(tick);
         }
 
