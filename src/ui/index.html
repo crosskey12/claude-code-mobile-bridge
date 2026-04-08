@@ -419,7 +419,7 @@
       var velocity = 0;
       var momentumId = null;
       var accumulated = 0;
-      var lineHeight = 16; // approx pixels per terminal line
+      var lineHeight = 6; // lower = faster scrolling per pixel of swipe
 
       container.addEventListener("touchstart", function(e) {
         if (e.touches.length === 1) {
@@ -450,7 +450,7 @@
         // Momentum scrolling: decay velocity over time
         if (Math.abs(velocity) < 2) return;
 
-        var momentum = velocity * 0.8;
+        var momentum = velocity * 2.5;
 
         function tick() {
           if (Math.abs(momentum) < 0.5) return;
@@ -460,7 +460,7 @@
             term.scrollLines(lines);
             accumulated -= lines * lineHeight;
           }
-          momentum *= 0.92; // friction
+          momentum *= 0.95; // friction (higher = longer coast)
           momentumId = requestAnimationFrame(tick);
         }
 
