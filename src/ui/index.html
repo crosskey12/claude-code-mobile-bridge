@@ -231,14 +231,31 @@
     var ctrlBtn = document.getElementById("ctrl-btn");
 
     // --- Terminal setup ---
+    var MIN_COLS = 80; // Claude Code needs at least 80 cols
+
+    function calcFontForMinCols(minCols) {
+      // Measure actual monospace char width at a known font size
+      var testSize = 100;
+      var probe = document.createElement("span");
+      probe.style.cssText = 'font-family:"SF Mono",Menlo,"Courier New",monospace;font-size:' + testSize + 'px;position:absolute;visibility:hidden;white-space:pre;';
+      probe.textContent = "MMMMMMMMMM";
+      document.body.appendChild(probe);
+      var charWidth = probe.offsetWidth / 10; // px per char at 100px font
+      document.body.removeChild(probe);
+
+      var container = document.getElementById("terminal-container");
+      var availWidth = container.clientWidth - 12;
+      // fontSize where minCols chars fit: fontSize * (charWidth/testSize) * minCols = availWidth
+      var size = Math.floor(availWidth / (minCols * (charWidth / testSize)));
+      return Math.max(5, Math.min(size, 16));
+    }
+
     function initTerminal(cols, rows) {
-      // Use FitAddon to let xterm.js pick its own natural size for the phone.
-      // Lines from tmux (which is wider) will wrap, but text is readable.
-      // Font size 13 gives ~45-50 cols on a phone in portrait — good enough.
+      var fontSize = calcFontForMinCols(MIN_COLS);
       fitAddon = new FitAddon.FitAddon();
 
       term = new Terminal({
-        fontSize: 13,
+        fontSize: fontSize,
         fontFamily: '"SF Mono", Menlo, "Courier New", monospace',
         theme: {
           background: "#0f0f17",
@@ -278,15 +295,13 @@
       term.loadAddon(webLinksAddon);
       term.open(document.getElementById("terminal-container"));
 
-      // Let xterm.js fit naturally to the phone screen
-      // Delay to let layout settle (especially on iOS with safe areas)
+      // Fit to screen, ensuring at least MIN_COLS columns
       setTimeout(function() {
         fitAddon.fit();
-        // Subtract 1 row as safety margin to prevent cutoff
-        var proposedRows = term.rows - 1;
-        if (proposedRows > 5) {
-          term.resize(term.cols, proposedRows);
-        }
+        var cols = Math.max(term.cols, MIN_COLS);
+        var rows = term.rows - 1; // safety margin
+        if (rows < 10) rows = 10;
+        term.resize(cols, rows);
       }, 200);
 
       // Send keystrokes to server as binary
@@ -357,8 +372,10 @@
           term.reset();
           setTimeout(function() {
             fitAddon.fit();
+            var cols = Math.max(term.cols, MIN_COLS);
             var rows = term.rows - 1;
-            if (rows > 5) term.resize(term.cols, rows);
+            if (rows < 10) rows = 10;
+            term.resize(cols, rows);
           }, 200);
         }
       };
