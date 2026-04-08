@@ -109,7 +109,7 @@
     #terminal-container {
       flex: 1;
       overflow: hidden;
-      padding: 4px;
+      padding: 4px 4px 8px 4px;
       padding-top: env(safe-area-inset-top, 4px);
     }
 
@@ -279,9 +279,15 @@
       term.open(document.getElementById("terminal-container"));
 
       // Let xterm.js fit naturally to the phone screen
-      requestAnimationFrame(function() {
+      // Delay to let layout settle (especially on iOS with safe areas)
+      setTimeout(function() {
         fitAddon.fit();
-      });
+        // Subtract 1 row as safety margin to prevent cutoff
+        var proposedRows = term.rows - 1;
+        if (proposedRows > 5) {
+          term.resize(term.cols, proposedRows);
+        }
+      }, 200);
 
       // Send keystrokes to server as binary
       term.onData(function(data) {
@@ -349,9 +355,11 @@
         // Terminal will be initialized when we receive pane_size message
         if (term) {
           term.reset();
-          requestAnimationFrame(function() {
-            fitAddon.fit(); // re-fit and send resize to server
-          });
+          setTimeout(function() {
+            fitAddon.fit();
+            var rows = term.rows - 1;
+            if (rows > 5) term.resize(term.cols, rows);
+          }, 200);
         }
       };
 
