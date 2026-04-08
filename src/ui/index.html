@@ -172,6 +172,16 @@
 
     .key-btn:active { background: var(--accent-dim); }
 
+    /* Desktop site mode: bigger buttons */
+    @media (min-width: 768px) {
+      .key-btn {
+        padding: 16px 24px;
+        font-size: 18px;
+        border-radius: 8px;
+      }
+      #key-toolbar { gap: 8px; padding: 10px 12px; }
+    }
+
     .key-btn.active {
       background: var(--accent);
       color: white;
@@ -522,7 +532,57 @@
     });
 
     // --- Special key toolbar ---
-    document.getElementById("key-toolbar").addEventListener("click", function(e) {
+    function parseKey(raw) {
+      return raw.replace(/\\x([0-9a-fA-F]{2})/g, function(_, hex) {
+        return String.fromCharCode(parseInt(hex, 16));
+      }).replace(/\\t/g, "\t").replace(/\\x1b/g, "\x1b");
+    }
+
+    function sendKey(key) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(new TextEncoder().encode(key));
+      }
+    }
+
+    // Hold-to-repeat for arrow keys
+    var holdInterval = null;
+    var holdTimeout = null;
+    var HOLD_KEYS = ["\\x1b[A", "\\x1b[B", "\\x1b[D", "\\x1b[C"]; // up/down/left/right
+
+    function startHold(btn) {
+      var raw = btn.getAttribute("data-key");
+      if (!raw) return;
+      var key = parseKey(raw);
+      sendKey(key); // send immediately
+      // After 300ms, start repeating at 80ms intervals
+      holdTimeout = setTimeout(function() {
+        holdInterval = setInterval(function() { sendKey(key); }, 80);
+      }, 300);
+    }
+
+    function stopHold() {
+      if (holdTimeout) { clearTimeout(holdTimeout); holdTimeout = null; }
+      if (holdInterval) { clearInterval(holdInterval); holdInterval = null; }
+    }
+
+    var toolbar = document.getElementById("key-toolbar");
+
+    // Touch events for hold-to-repeat
+    toolbar.addEventListener("touchstart", function(e) {
+      var btn = e.target.closest(".key-btn");
+      if (!btn || !term || btn.id === "ctrl-btn" || btn.id === "disconnect-btn") return;
+      var raw = btn.getAttribute("data-key");
+      if (raw && HOLD_KEYS.indexOf(raw) !== -1) {
+        e.preventDefault();
+        startHold(btn);
+      }
+    }, { passive: false });
+
+    toolbar.addEventListener("touchend", stopHold, { passive: true });
+    toolbar.addEventListener("touchcancel", stopHold, { passive: true });
+
+    // Click for non-holdable buttons (and fallback)
+    toolbar.addEventListener("click", function(e) {
       var btn = e.target.closest(".key-btn");
       if (!btn || !term) return;
 
@@ -533,19 +593,23 @@
         return;
       }
 
-      var key = btn.getAttribute("data-key");
-      if (key) {
-        // Unescape the key string (data attributes store literal chars)
-        key = key.replace(/\\x([0-9a-fA-F]{2})/g, function(_, hex) {
-          return String.fromCharCode(parseInt(hex, 16));
-        }).replace(/\\t/g, "\t").replace(/\\x1b/g, "\x1b");
+      if (btn.id === "disconnect-btn") return; // handled separately
 
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          var encoder = new TextEncoder();
-          ws.send(encoder.encode(key));
-        }
-        term.focus();
+      var raw = btn.getAttribute("data-key");
+      if (!raw) return;
+
+      // Arrow keys already handled by touchstart hold
+      if (HOLD_KEYS.indexOf(raw) !== -1) return;
+
+      var key = parseKey(raw);
+      if (ctrlActive && key.length === 1) {
+        var code = key.toLowerCase().charCodeAt(0);
+        if (code >= 97 && code <= 122) key = String.fromCharCode(code - 96);
+        ctrlActive = false;
+        ctrlBtn.classList.remove("active");
       }
+      sendKey(key);
+      term.focus();
     });
 
     // --- Auto-restore session ---
