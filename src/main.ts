@@ -1,5 +1,5 @@
 import { parseArgs } from "node:util";
-import { getLanIP } from "./network.ts";
+import { getLanIP, getLocalHostname } from "./network.ts";
 import { generateToken, createAuthValidator } from "./auth.ts";
 import { TmuxTerminal } from "./terminal.ts";
 import { createServer } from "./server.ts";
@@ -51,23 +51,30 @@ const authValidator = createAuthValidator(token);
 const terminal = new TmuxTerminal(sessionName);
 terminal.attach();
 
-const server = createServer({ host: lanIP, port, authValidator, terminal });
+// Bind to 0.0.0.0 so both IP and hostname connections work
+const server = createServer({ host: "0.0.0.0", port, authValidator, terminal });
 await server.start();
 
-const urlStr = `http://${lanIP}:${port}`;
+const hostname = getLocalHostname();
+const ipUrl = `http://${lanIP}:${port}`;
+const hostUrl = hostname ? `http://${hostname}:${port}` : null;
+
+const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
+const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
+const cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
+const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
+const yellow = (s: string) => `\x1b[33m${s}\x1b[0m`;
+const magenta = (s: string) => `\x1b[35m${s}\x1b[0m`;
 
 console.log(`
-╔══════════════════════════════════════════════════════╗
-║           Claude Code Terminal Mirror                ║
-╠══════════════════════════════════════════════════════╣
-║                                                      ║
-║  URL:   ${urlStr.padEnd(44)}║
-║  Token: ${token.padEnd(44)}║
-║  tmux:  ${sessionName.padEnd(44)}║
-║                                                      ║
-║  Open the URL on your phone and enter the token.     ║
-║                                                      ║
-╚══════════════════════════════════════════════════════╝
+  ${bold(cyan("Claude Code Terminal Mirror"))}
+  ${dim("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")}
+
+  ${dim("URL")}     ${green(ipUrl)}${hostUrl ? `\n  ${dim(" ")}       ${green(hostUrl)}` : ""}
+  ${dim("Token")}   ${yellow(token)}
+  ${dim("tmux")}    ${magenta(sessionName)}
+
+  Open the URL on your phone and enter the token.${hostUrl ? `\n  ${dim(".local works on iOS. Android? lol good luck.")}` : ""}
 `);
 
 // Graceful shutdown

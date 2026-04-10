@@ -140,18 +140,38 @@
       50% { opacity: 0.2; }
     }
 
-    /* Special key toolbar */
-    #key-toolbar {
-      display: flex;
-      gap: 4px;
-      padding: 6px 8px;
-      padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 6px);
+    /* Two-row toolbar */
+    #toolbar-wrapper {
+      flex-shrink: 0;
       background: var(--bg-surface);
       border-top: 1px solid var(--border);
-      flex-shrink: 0;
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
+      padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 4px);
     }
+
+    .toolbar-row {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 8px;
+    }
+
+    .toolbar-row:first-child {
+      padding-top: 6px;
+    }
+
+    .toolbar-row:last-child {
+      padding-bottom: 4px;
+    }
+
+    .toolbar-divider {
+      width: 1px;
+      height: 22px;
+      background: var(--border);
+      margin: 0 2px;
+      flex-shrink: 0;
+    }
+
+    .toolbar-spacer { flex: 1; }
 
     .key-btn {
       padding: 8px 12px;
@@ -172,6 +192,16 @@
 
     .key-btn:active { background: var(--accent-dim); }
 
+    /* Action button colors */
+    .key-btn.action-yes { background: rgba(80, 240, 128, 0.12); border-color: rgba(80, 240, 128, 0.35); color: #50f080; }
+    .key-btn.action-yes:active { background: rgba(80, 240, 128, 0.3); }
+    .key-btn.action-always { background: rgba(80, 208, 240, 0.12); border-color: rgba(80, 208, 240, 0.35); color: #50d0f0; }
+    .key-btn.action-always:active { background: rgba(80, 208, 240, 0.3); }
+    .key-btn.action-no { background: rgba(240, 80, 80, 0.12); border-color: rgba(240, 80, 80, 0.35); color: #f05050; }
+    .key-btn.action-no:active { background: rgba(240, 80, 80, 0.3); }
+    .key-btn.exit-btn { background: #f05050; border-color: #f05050; color: white; }
+    .key-btn.exit-btn:active { background: #d03030; }
+
     /* Desktop site mode: bigger buttons */
     @media (min-width: 768px) {
       .key-btn {
@@ -179,13 +209,31 @@
         font-size: 18px;
         border-radius: 8px;
       }
-      #key-toolbar { gap: 8px; padding: 10px 12px; }
+      .toolbar-row { gap: 8px; padding: 6px 12px; }
+      .toolbar-divider { height: 30px; }
     }
 
     .key-btn.active {
       background: var(--accent);
       color: white;
       border-color: var(--accent);
+    }
+
+    /* Tap-to-cursor ripple */
+    .tap-ripple {
+      position: fixed;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: var(--accent);
+      opacity: 0.4;
+      pointer-events: none;
+      transform: translate(-50%, -50%) scale(1);
+      animation: tapRipple 0.35s ease-out forwards;
+      z-index: 50;
+    }
+    @keyframes tapRipple {
+      to { transform: translate(-50%, -50%) scale(2); opacity: 0; }
     }
 
     .hidden { display: none !important; }
@@ -206,18 +254,29 @@
   <div id="terminal-screen" class="hidden">
     <div id="conn-dot"></div>
     <div id="terminal-container"></div>
-    <div id="key-toolbar">
-      <button class="key-btn" data-key="\x1b">Esc</button>
-      <button class="key-btn" id="ctrl-btn">Ctrl</button>
-      <button class="key-btn" data-key="\t">Tab</button>
-      <button class="key-btn" data-key="\x03">C-c</button>
-      <button class="key-btn" data-key="\x1a">C-z</button>
-      <button class="key-btn" data-key="\x04">C-d</button>
-      <button class="key-btn" data-key="\x1b[A">&uarr;</button>
-      <button class="key-btn" data-key="\x1b[B">&darr;</button>
-      <button class="key-btn" data-key="\x1b[D">&larr;</button>
-      <button class="key-btn" data-key="\x1b[C">&rarr;</button>
-      <button class="key-btn" id="disconnect-btn" style="margin-left:auto;background:#f05050;border-color:#f05050;color:white;">Exit</button>
+    <div id="toolbar-wrapper">
+      <div class="toolbar-row" id="nav-row">
+        <button class="key-btn" data-key="\x1b[D">&larr;</button>
+        <button class="key-btn" data-key="\x1b[B">&darr;</button>
+        <button class="key-btn" data-key="\x1b[A">&uarr;</button>
+        <button class="key-btn" data-key="\x1b[C">&rarr;</button>
+        <span class="toolbar-divider"></span>
+        <button class="key-btn" id="ctrl-btn">Ctrl</button>
+        <button class="key-btn" data-key="\x0d">Enter</button>
+        <span class="toolbar-spacer"></span>
+        <button class="key-btn" data-key="\x1b">Esc</button>
+      </div>
+      <div class="toolbar-row" id="action-row">
+        <button class="key-btn exit-btn" id="disconnect-btn">Exit</button>
+        <span class="toolbar-divider"></span>
+        <button class="key-btn action-yes" data-seq="1">Yes</button>
+        <button class="key-btn action-always" data-seq="2">Always</button>
+        <button class="key-btn action-no" data-seq="3">No</button>
+        <span class="toolbar-spacer"></span>
+        <button class="key-btn" data-key="\x03">C-c</button>
+        <button class="key-btn" data-key="\x1a">C-z</button>
+        <button class="key-btn" data-key="\x04">C-d</button>
+      </div>
     </div>
   </div>
 
@@ -538,6 +597,10 @@
       }).replace(/\\t/g, "\t").replace(/\\x1b/g, "\x1b");
     }
 
+    function parseSeq(raw) {
+      return parseKey(raw).replace(/\\r/g, "\r").replace(/\\n/g, "\n");
+    }
+
     function sendKey(key) {
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(new TextEncoder().encode(key));
@@ -548,6 +611,7 @@
     var holdInterval = null;
     var holdTimeout = null;
     var HOLD_KEYS = ["\\x1b[A", "\\x1b[B", "\\x1b[D", "\\x1b[C"]; // up/down/left/right
+    var isTouchDevice = "ontouchstart" in window;
 
     function startHold(btn) {
       var raw = btn.getAttribute("data-key");
@@ -565,7 +629,7 @@
       if (holdInterval) { clearInterval(holdInterval); holdInterval = null; }
     }
 
-    var toolbar = document.getElementById("key-toolbar");
+    var toolbar = document.getElementById("toolbar-wrapper");
 
     // Touch events for hold-to-repeat
     toolbar.addEventListener("touchstart", function(e) {
@@ -581,7 +645,7 @@
     toolbar.addEventListener("touchend", stopHold, { passive: true });
     toolbar.addEventListener("touchcancel", stopHold, { passive: true });
 
-    // Click for non-holdable buttons (and fallback)
+    // Click for all toolbar buttons
     toolbar.addEventListener("click", function(e) {
       var btn = e.target.closest(".key-btn");
       if (!btn || !term) return;
@@ -595,11 +659,24 @@
 
       if (btn.id === "disconnect-btn") return; // handled separately
 
+      // Handle data-seq buttons (Yes/Always/No)
+      var seq = btn.getAttribute("data-seq");
+      if (seq) {
+        sendKey(parseSeq(seq));
+        term.focus();
+        return;
+      }
+
       var raw = btn.getAttribute("data-key");
       if (!raw) return;
 
-      // Arrow keys already handled by touchstart hold
-      if (HOLD_KEYS.indexOf(raw) !== -1) return;
+      // Arrow keys: on touch devices, handled by touchstart hold; on desktop, send here
+      if (HOLD_KEYS.indexOf(raw) !== -1) {
+        if (isTouchDevice) return;
+        sendKey(parseKey(raw));
+        term.focus();
+        return;
+      }
 
       var key = parseKey(raw);
       if (ctrlActive && key.length === 1) {
@@ -611,6 +688,69 @@
       sendKey(key);
       term.focus();
     });
+
+    // --- Tap-to-move cursor (horizontal only) ---
+    (function() {
+      var container = document.getElementById("terminal-container");
+      var tapStartX = 0, tapStartY = 0, tapStartTime = 0;
+      var wasDrag = false;
+
+      container.addEventListener("touchstart", function(e) {
+        if (e.touches.length === 1) {
+          tapStartX = e.touches[0].clientX;
+          tapStartY = e.touches[0].clientY;
+          tapStartTime = Date.now();
+          wasDrag = false;
+        }
+      }, { passive: true });
+
+      container.addEventListener("touchmove", function(e) {
+        if (e.touches.length !== 1) return;
+        var dx = e.touches[0].clientX - tapStartX;
+        var dy = e.touches[0].clientY - tapStartY;
+        if (Math.abs(dx) > 10 || Math.abs(dy) > 10) wasDrag = true;
+      }, { passive: true });
+
+      container.addEventListener("touchend", function(e) {
+        if (wasDrag || !term || !ws) return;
+        if (Date.now() - tapStartTime > 300) return;
+
+        var touch = e.changedTouches[0];
+        if (!touch) return;
+
+        var screen = document.querySelector(".xterm-screen");
+        if (!screen) return;
+        var rect = screen.getBoundingClientRect();
+        var cellWidth = rect.width / term.cols;
+        var cellHeight = rect.height / term.rows;
+
+        var tapCol = Math.floor((touch.clientX - rect.left) / cellWidth);
+        var tapRow = Math.floor((touch.clientY - rect.top) / cellHeight);
+        tapCol = Math.max(0, Math.min(tapCol, term.cols - 1));
+        tapRow = Math.max(0, Math.min(tapRow, term.rows - 1));
+
+        var buf = term.buffer.active;
+        if (tapRow !== buf.cursorY) return; // horizontal only
+        if (buf.viewportY !== buf.baseY) return; // skip if viewing scrollback
+
+        var delta = tapCol - buf.cursorX;
+        if (delta === 0) return;
+
+        var arrowKey = delta > 0 ? "\x1b[C" : "\x1b[D";
+        var seq = "";
+        for (var i = 0; i < Math.abs(delta); i++) seq += arrowKey;
+        sendKey(seq);
+
+        // Visual ripple
+        var ripple = document.createElement("div");
+        ripple.className = "tap-ripple";
+        ripple.style.left = touch.clientX + "px";
+        ripple.style.top = touch.clientY + "px";
+        document.body.appendChild(ripple);
+        ripple.addEventListener("animationend", function() { ripple.remove(); });
+        setTimeout(function() { if (ripple.parentNode) ripple.remove(); }, 500);
+      }, { passive: true });
+    })();
 
     // --- Auto-restore session ---
     var savedToken = sessionStorage.getItem("ccbridge_token");
